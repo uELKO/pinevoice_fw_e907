@@ -9,6 +9,7 @@
 #include <avutil/named_straightfifo.h>
 #include <player.h>
 #include "../display/pwm_led/pwm_led.h"
+#include "../player/app_player.h"
 #include "wyoming.h"
 #include "../version.h"
 
@@ -26,6 +27,7 @@ static void mic_evt_cb(int source, mic_event_id_t evt_id, void *data, int size) 
   switch (evt_id) {
     case MIC_EVENT_SESSION_START: {
       LOGD(TAG, "WAKE UP!!!");
+      local_wakeup_audio_play("chime.opus");
       int32_t ret = wsat_wake_detection();
       if (!app_network_internet_is_connected() || ret == -WSAT_ERROR_SAT_DISCONNECTED) {
         if (!app_network_internet_is_connected()) {
@@ -62,7 +64,7 @@ static struct wsat_wake wake = {
     NULL,
     false,
   },
-  "hey jarvis"
+  "alexa"
 };
 
 static void mic_streamer_fn(void *arg)
