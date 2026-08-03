@@ -2,7 +2,10 @@
  * Copyright (C) 2022 Alibaba Group Holding Limited
  */
 // Huge rework of this file was made by LLM, but verified & tested by human.
+#include <stdbool.h>
+
 #include <aos/kernel.h>
+#include <aos/kv.h>
 #include <ulog/ulog.h>
 
 #include <drv/pwm.h>
@@ -77,6 +80,35 @@ static csi_pwm_t g_pwm_b_handler;
 static uint8_t s_q_buffer[sizeof(pwm_led_command_t) * PWM_LED_COMMAND_QUEUE_DEPTH];
 static aos_queue_t s_queue;
 static volatile light_show_state_types_t g_state_show_id = LIGHT_SHOW_NONE;
+
+/* Whether the idle ("ready", waiting for wakeword) show is allowed to light
+ * up the ring. Persisted so a user who wants a dark idle ring keeps that
+ * choice across reboots; toggled via the MQTT "LED idle" switch. */
+#define LED_IDLE_ENABLED_KV "led_idle_en"
+static bool s_led_idle_enabled = true;
+
+void led_idle_set_enabled(bool enabled)
+{
+    s_led_idle_enabled = enabled;
+    aos_kv_setint(LED_IDLE_ENABLED_KV, enabled ? 1 : 0);
+
+    /* Apply immediately instead of waiting for the next idle transition.
+     * The idle glow is normally driven through light_show_state_msg_send()
+     * (see wyoming.c), which uses the transient/pending-show queue, not the
+     * separate "state" layer -- clear both so this works regardless of
+     * which path last lit the ring. */
+    if (enabled) {
+        light_show_state_msg_send(LIGHT_SHOW_READY, NULL);
+    } else {
+        light_show_rgb_clear();
+        light_show_state_clear();
+    }
+}
+
+bool led_idle_get_enabled(void)
+{
+    return s_led_idle_enabled;
+}
 
 /*
  * Hex colors are authored in a perceptual space, while PWM duty is linear.
@@ -778,6 +810,10 @@ int light_show_state_init(void)
 
     g_state_show_id = LIGHT_SHOW_NONE;
 
+    int led_idle_en = 1;
+    aos_kv_getint(LED_IDLE_ENABLED_KV, &led_idle_en);
+    s_led_idle_enabled = (led_idle_en != 0);
+
     ret = led_pwm_rgb_init();
     if (ret != 0) {
         LOGE(TAG, "init light show error");
@@ -823,6 +859,13 @@ int light_show_state_msg_send(light_show_state_types_t state_id, void *arg)
 {
     pwm_led_command_t command;
 
+    if (state_id == LIGHT_SHOW_READY && !s_led_idle_enabled) {
+        /* LIGHT_SHOW_READY normally goes through the transient/pending-show
+         * queue (below), not the separate "state" layer -- light_show_state_clear()
+         * clears the wrong layer here and leaves the ready show visibly playing. */
+        return light_show_rgb_clear();
+    }
+
     command.type = PWM_LED_COMMAND_PLAY_SHOW;
     command.show_id = state_id;
     command.flags = (light_show_msg_flags_t)(uintptr_t)arg;
@@ -835,7 +878,8 @@ int light_show_state_set(light_show_state_types_t state_id)
     pwm_led_command_t command;
     int ret;
 
-    if (state_id == LIGHT_SHOW_NONE) {
+    if (state_id == LIGHT_SHOW_NONE ||
+        (state_id == LIGHT_SHOW_READY && !s_led_idle_enabled)) {
         return light_show_state_clear();
     }
 

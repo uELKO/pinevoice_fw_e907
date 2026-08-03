@@ -5,6 +5,7 @@
 #ifndef _PWM_LED_H_
 #define _PWM_LED_H_
 
+#include <stdbool.h>
 #include <stdint.h>
 
 typedef enum {
@@ -44,5 +45,9 @@ int light_show_state_set(light_show_state_types_t state_id);
 light_show_state_types_t light_show_state_get(void);
 int light_show_state_clear(void);
 int light_show_rgb_clear(void);
+
+/* Whether the idle/"ready" show is allowed to light up the ring. */
+void led_idle_set_enabled(bool enabled);
+bool led_idle_get_enabled(void);
 
 #endif

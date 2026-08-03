@@ -10,6 +10,9 @@
 #include <player.h>
 #include "../display/pwm_led/pwm_led.h"
 #include "../player/app_player.h"
+#include "../player/auto_volume.h"
+#include "../mqtt/http_config.h"
+#include "../mqtt/mqtt_client.h"
 #include "wyoming.h"
 #include "../version.h"
 
@@ -319,6 +322,9 @@ void wyoming_init()
   aui_mic_event_register(mic_evt_cb);
   aui_mic_start();
   wyoming_mdns_advertise_start();
+  http_config_start();
+  auto_volume_init();
+  mqtt_client_start();
   LOGI(TAG, "Wyoming init\r\n");
 }
 

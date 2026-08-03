@@ -26,6 +26,10 @@ static uint8_t s_mdns_running;
 static uint8_t s_mdns_started;
 static uint8_t s_mdns_sta_added;
 static char s_service_instance[(6 * 2) + 1];
+/* MAC-suffixed so multiple PineVoice units on the same network don't fight
+ * over the same mDNS hostname -- lwIP's mDNS conflict "resolution" only
+ * logs a warning, it doesn't actually rename on collision. */
+static char s_hostname[10 + (3 * 2) + 1] = "pinevoice";
 
 #if LWIP_NETIF_EXT_STATUS_CALLBACK
 NETIF_DECLARE_EXT_CALLBACK(s_mdns_netif_cb);
@@ -53,7 +57,7 @@ static void wyoming_mdns_attach_sta_locked(struct netif *sta_netif) {
     return;
   }
 
-  res = mdns_resp_add_netif(sta_netif, "pinevoice", 120 /*2 mins*/);
+  res = mdns_resp_add_netif(sta_netif, s_hostname, 120 /*2 mins*/);
   if (res != ERR_OK) {
     LOGE("mdns", "mdns_resp_add_netif failed: %d", res);
     return;
@@ -106,6 +110,7 @@ void wyoming_mdns_advertise_start(void) {
 
   bl_efuse_read_mac_smart(1, mac, 0);
   snprintf(s_service_instance, sizeof(s_service_instance), "%02x%02x%02x%02x%02x%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  snprintf(s_hostname, sizeof(s_hostname), "pinevoice-%02x%02x%02x", mac[3], mac[4], mac[5]);
 
   LOCK_TCPIP_CORE();
 

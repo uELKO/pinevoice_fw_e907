@@ -161,6 +161,7 @@ source_file:
   - app/src/factory/*.c
   - app/src/wyoming/*.c
   - app/src/improv/*.c
+  - app/src/mqtt/*.c
   # - app/src/bt/*.c
 
 
