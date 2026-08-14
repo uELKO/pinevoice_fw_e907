@@ -16,6 +16,7 @@
 #include "sys/app_sys.h"
 #include "event_mgr/app_event.h"
 #include "../display/pwm_led/pwm_led.h"
+#include "../mqtt/mqtt_client.h"
 #include <wyoming/satellite.h>
 #include <yoc/mic.h>
 #define TAG "keymsg"
@@ -40,11 +41,15 @@ __attribute__(( weak )) int smartspeak_key_key_msg_factory_pressed(void)
     return 0;
 }
 
+/* Applies the codec's hardware gain register (0~100). Wyoming-streamed TTS/
+ * chime audio has no software volume of its own, so this is what actually
+ * changes what you hear -- smtaudio_vol_* only affects local aui_player
+ * (.opus prompt) playback. Both need to move together for a single "volume"
+ * concept. */
 extern int volume2db2regval(int val);
 
 static void key_msg_proc_task(void *arg)
 {
-    static int vol = 60;
     int    keymsg_id;
     size_t len;
 
@@ -58,40 +63,19 @@ static void key_msg_proc_task(void *arg)
 
         switch (keymsg_id) {          
             case KEY_MSG_VOL_UP:
-                // if (light_state_get() != LIGHT_SHOW_NET_AUTH) {
-                //     LOGE(TAG, "light state unauth:%d", light_state_get());
-                //     break;
-                // }
-                vol += 10;
-                if (vol > 100) {
-                    vol = 100;
-                    // smtaudio_vol_up(10);
-                    // led_pwm_rgb_config(1000, 1000, 1000, 0, 0, 0);
-                    // break;
-                }
-                LOGD(TAG, "vol up:%d", vol);
-                volume2db2regval(vol);
-                //smtaudio_vol_up(10);
+                smtaudio_vol_up(10);
+                volume2db2regval(smtaudio_vol_get());
+                mqtt_client_notify_volume_changed();
+                LOGD(TAG, "vol up:%d", smtaudio_vol_get());
                 light_show_state_msg_send(LIGHT_SHOW_VOLUME_UP, LIGHT_SHOW_MSG_FLAGS(LIGHT_SHOW_MSG_FLAG_INTERRUPT));
                 break;
-            
+
             case KEY_MSG_VOL_DOWN:
-                // if (light_state_get() != LIGHT_SHOW_NET_AUTH) {
-                //     LOGE(TAG, "light state unauth:%d", light_state_get());
-                //     break;
-                // }
-                vol -= 10;
-                if (vol < 0) {
-                    vol = 0;
-                    // smtaudio_vol_down(10);
-                    // led_pwm_rgb_config(1000, 1000, 1000, 0, 0, 0);
-                    // break;
-                }
-                LOGD(TAG, "vol down:%d", vol);
-                volume2db2regval(vol);
-                // led_pwm_rgb_config(1000, 1000, 1000, 0, 0, 0);
+                smtaudio_vol_down(10);
+                volume2db2regval(smtaudio_vol_get());
+                mqtt_client_notify_volume_changed();
+                LOGD(TAG, "vol down:%d", smtaudio_vol_get());
                 light_show_state_msg_send(LIGHT_SHOW_VOLUME_DOWN, LIGHT_SHOW_MSG_FLAGS(LIGHT_SHOW_MSG_FLAG_INTERRUPT));
-                //smtaudio_vol_down(10);
                 break;
 
             case KEY_MSG_MUTE:

@@ -5,6 +5,7 @@
 
 #include <aos/kernel.h>
 #include <aos/kv.h>
+#include <smart_audio.h>
 #include <ulog/ulog.h>
 #include <wyoming/satellite.h>
 
@@ -18,6 +19,10 @@
 #include "../sys/app_sys.h"
 #include "wifi_mgmr_ext.h"
 
+/* Sets the codec's hardware gain register (0~100) -- see app_key_msg.c for
+ * why this needs to move in lockstep with smtaudio_vol_*. */
+extern int volume2db2regval(int val);
+
 #define TAG "MQTT"
 
 #define MQTT_CHECK_DELAY_MS  2000
@@ -29,6 +34,7 @@ enum mqtt_cmd_topic {
     MQTT_CMD_TOPIC_NONE,
     MQTT_CMD_TOPIC_RESTART,
     MQTT_CMD_TOPIC_LED_IDLE,
+    MQTT_CMD_TOPIC_VOLUME,
     MQTT_CMD_TOPIC_VOL_MIN,
     MQTT_CMD_TOPIC_VOL_MAX,
 };
@@ -53,6 +59,21 @@ static void mqtt_publish_led_idle_state(bool enabled)
 
     snprintf(topic, sizeof(topic), "pinevoice/%s/led_idle/state", s_mac_id);
     mqtt_pub(topic, enabled ? "ON" : "OFF", enabled ? 2 : 3, 1);
+}
+
+static void mqtt_publish_volume_state(void)
+{
+    char topic[MQTT_TOPIC_MAX];
+    char payload[8];
+
+    snprintf(topic, sizeof(topic), "pinevoice/%s/volume/state", s_mac_id);
+    snprintf(payload, sizeof(payload), "%d", smtaudio_vol_get());
+    mqtt_pub(topic, payload, strlen(payload), 1);
+}
+
+void mqtt_client_notify_volume_changed(void)
+{
+    mqtt_publish_volume_state();
 }
 
 static void mqtt_publish_auto_vol_state(void)
@@ -101,6 +122,16 @@ static void mqtt_publish_discovery(void)
              s_mac_id, s_mac_id, s_mac_id, s_mac_id, device_block);
     mqtt_pub(topic, payload, strlen(payload), 1);
 
+    snprintf(topic, sizeof(topic), "homeassistant/number/pinevoice_%s/volume/config", s_mac_id);
+    snprintf(payload, sizeof(payload),
+             "{\"name\":\"Volume\",\"unique_id\":\"pinevoice_%s_volume\","
+             "\"command_topic\":\"pinevoice/%s/volume/set\","
+             "\"state_topic\":\"pinevoice/%s/volume/state\","
+             "\"availability_topic\":\"pinevoice/%s/status\","
+             "\"min\":0,\"max\":100,\"step\":1,\"mode\":\"slider\",%s}",
+             s_mac_id, s_mac_id, s_mac_id, s_mac_id, device_block);
+    mqtt_pub(topic, payload, strlen(payload), 1);
+
     snprintf(topic, sizeof(topic), "homeassistant/number/pinevoice_%s/auto_vol_min/config", s_mac_id);
     snprintf(payload, sizeof(payload),
              "{\"name\":\"Auto Volume Min %%\",\"unique_id\":\"pinevoice_%s_auto_vol_min\","
@@ -131,6 +162,8 @@ static void mqtt_incoming_publish_cb(void *arg, const char *topic, u32_t tot_len
         s_incoming_topic = MQTT_CMD_TOPIC_RESTART;
     } else if (strstr(topic, "/led_idle/set")) {
         s_incoming_topic = MQTT_CMD_TOPIC_LED_IDLE;
+    } else if (strstr(topic, "/volume/set")) {
+        s_incoming_topic = MQTT_CMD_TOPIC_VOLUME;
     } else if (strstr(topic, "/auto_vol_min/set")) {
         s_incoming_topic = MQTT_CMD_TOPIC_VOL_MIN;
     } else if (strstr(topic, "/auto_vol_max/set")) {
@@ -159,6 +192,11 @@ static void mqtt_incoming_data_cb(void *arg, const u8_t *data, u16_t len, u8_t f
     case MQTT_CMD_TOPIC_LED_IDLE:
         led_idle_set_enabled(strcmp(payload, "ON") == 0);
         mqtt_publish_led_idle_state(led_idle_get_enabled());
+        break;
+    case MQTT_CMD_TOPIC_VOLUME:
+        smtaudio_vol_set(atoi(payload));
+        volume2db2regval(smtaudio_vol_get());
+        mqtt_publish_volume_state();
         break;
     case MQTT_CMD_TOPIC_VOL_MIN:
         auto_volume_get_range(&min_pct, &max_pct);
@@ -193,6 +231,8 @@ static void mqtt_connection_cb(mqtt_client_t *client, void *arg, mqtt_connection
     mqtt_subscribe(client, topic, 0, NULL, NULL);
     snprintf(topic, sizeof(topic), "pinevoice/%s/led_idle/set", s_mac_id);
     mqtt_subscribe(client, topic, 0, NULL, NULL);
+    snprintf(topic, sizeof(topic), "pinevoice/%s/volume/set", s_mac_id);
+    mqtt_subscribe(client, topic, 0, NULL, NULL);
     snprintf(topic, sizeof(topic), "pinevoice/%s/auto_vol_min/set", s_mac_id);
     mqtt_subscribe(client, topic, 0, NULL, NULL);
     snprintf(topic, sizeof(topic), "pinevoice/%s/auto_vol_max/set", s_mac_id);
@@ -203,6 +243,7 @@ static void mqtt_connection_cb(mqtt_client_t *client, void *arg, mqtt_connection
 
     mqtt_publish_discovery();
     mqtt_publish_led_idle_state(led_idle_get_enabled());
+    mqtt_publish_volume_state();
     mqtt_publish_auto_vol_state();
 }
 
