@@ -15,4 +15,11 @@ void auto_volume_on_ambient_level(float level);
 void auto_volume_set_range(int min_pct, int max_pct);
 void auto_volume_get_range(int *min_pct, int *max_pct);
 
+/* Call whenever the volume changes through a manual path (buttons, MQTT).
+ * Suppresses auto_volume_on_ambient_level() for a short cooldown afterwards
+ * -- otherwise an ambient report landing between two button presses nudges
+ * the live volume out from under the user, and the next press computes its
+ * +/-10 off that nudged value instead of what they actually last set. */
+void auto_volume_notify_manual_change(void);
+
 #endif

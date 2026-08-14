@@ -1,3 +1,4 @@
+#include <aos/kernel.h>
 #include <aos/kv.h>
 #include <smart_audio.h>
 
@@ -13,6 +14,11 @@
 #define AUTO_VOL_PCT_FLOOR   50
 #define AUTO_VOL_PCT_CEIL    200
 
+/* How long to suppress ambient-driven adjustments after a manual volume
+ * change, so a burst of button presses doesn't fight with an ambient report
+ * landing in between. */
+#define AUTO_VOL_MANUAL_COOLDOWN_MS  8000
+
 /* Ambient envelope calibration (raw int16 RMS-ish scale, see agc.c on the
  * C906 side) -- tune against real hardware/room levels. */
 #define AMBIENT_QUIET_LEVEL   200.0f
@@ -20,6 +26,12 @@
 
 static float s_min_mult = AUTO_VOL_MIN_PCT_DEFAULT / 100.0f;
 static float s_max_mult = AUTO_VOL_MAX_PCT_DEFAULT / 100.0f;
+static long long s_last_manual_change_ms = 0;
+
+void auto_volume_notify_manual_change(void)
+{
+    s_last_manual_change_ms = aos_now_ms();
+}
 
 void auto_volume_init(void)
 {
@@ -76,6 +88,14 @@ void auto_volume_on_ambient_level(float level)
     /* Don't nudge the volume mid-playback; wait for the next report once
      * idle again so the change isn't audible as a jump. */
     if (smtaudio_get_state() == SMTAUDIO_STATE_PLAYING) {
+        return;
+    }
+
+    /* Don't fight a manual change that just happened -- aui_player_vol_set()
+     * below would otherwise land between two button presses and get read
+     * back as the new "current" volume by the next one (see
+     * local_play_vol_up/down in smart_audio), making it jump around. */
+    if (aos_now_ms() - s_last_manual_change_ms < AUTO_VOL_MANUAL_COOLDOWN_MS) {
         return;
     }
 

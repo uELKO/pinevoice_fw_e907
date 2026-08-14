@@ -196,6 +196,7 @@ static void mqtt_incoming_data_cb(void *arg, const u8_t *data, u16_t len, u8_t f
     case MQTT_CMD_TOPIC_VOLUME:
         smtaudio_vol_set(atoi(payload));
         volume2db2regval(smtaudio_vol_get());
+        auto_volume_notify_manual_change();
         mqtt_publish_volume_state();
         break;
     case MQTT_CMD_TOPIC_VOL_MIN:
