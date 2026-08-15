@@ -110,6 +110,13 @@ bool led_idle_get_enabled(void)
     return s_led_idle_enabled;
 }
 
+void led_idle_reload_from_kv(void)
+{
+    int led_idle_en = 1;
+    aos_kv_getint(LED_IDLE_ENABLED_KV, &led_idle_en);
+    s_led_idle_enabled = (led_idle_en != 0);
+}
+
 /*
  * Hex colors are authored in a perceptual space, while PWM duty is linear.
  * Applying a gamma curve here keeps dark colors visually dark on the strip.
@@ -810,9 +817,12 @@ int light_show_state_init(void)
 
     g_state_show_id = LIGHT_SHOW_NONE;
 
-    int led_idle_en = 1;
-    aos_kv_getint(LED_IDLE_ENABLED_KV, &led_idle_en);
-    s_led_idle_enabled = (led_idle_en != 0);
+    /* KV isn't initialized yet this early in board_yoc_init() (aos_kv_init()
+     * only runs later, in app_sys_init()), so this always reads the
+     * not-yet-ready default. Real persisted state is loaded via
+     * led_idle_reload_from_kv(), called once KV is actually up -- see
+     * app_main.c. */
+    led_idle_reload_from_kv();
 
     ret = led_pwm_rgb_init();
     if (ret != 0) {

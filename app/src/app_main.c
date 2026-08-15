@@ -4,6 +4,8 @@
 
 #include <stdio.h>
 #include <aos/kernel.h>
+#include <aos/kv.h>
+#include <smart_audio.h>
 #include <ulog/ulog.h>
 #include <aos/cli.h>
 #include <aos/yloop.h>
@@ -46,6 +48,11 @@ int smartspeaker_main(int argc, char *argv[])
     board_yoc_init();
 
     app_sys_init();
+
+    /* KV is only initialized as part of app_sys_init() above -- reload
+     * anything that tried to read its persisted state earlier during
+     * board_yoc_init() (light_show_state_init() ran too early to see it). */
+    led_idle_reload_from_kv();
 
     // test();
     // app_sys_set_boot_reason_cache(BOOT_REASON_FACTORY_MODE);
@@ -100,8 +107,14 @@ int smartspeaker_main(int argc, char *argv[])
     } else {
         printf("!FCT!READY\r\n");
     }
-    volume2db2regval(70);
-
+    /* Re-apply the persisted volume to the codec's hardware gain register --
+     * this is the register that actually drives audible output (see
+     * app_key_msg.c / mqtt_client.c), independent of smtaudio's own restore
+     * of its aui_player-side volume. Previously hardcoded to 70 here,
+     * silently overriding whatever the user had last set. */
+    int boot_vol = SMART_AUDIO_DEFAULT_VOLUME;
+    aos_kv_getint(VOLUME_SAVE_KV_NAME, &boot_vol);
+    volume2db2regval(boot_vol);
 
     return 0;
 }

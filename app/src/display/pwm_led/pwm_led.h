@@ -50,4 +50,9 @@ int light_show_rgb_clear(void);
 void led_idle_set_enabled(bool enabled);
 bool led_idle_get_enabled(void);
 
+/* Re-reads the persisted enabled state from KV. Call once KV is actually
+ * initialized (see app_main.c) -- light_show_state_init() runs too early
+ * for its own KV read to see real data. */
+void led_idle_reload_from_kv(void);
+
 #endif

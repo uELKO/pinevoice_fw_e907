@@ -65,9 +65,16 @@ static void mqtt_publish_volume_state(void)
 {
     char topic[MQTT_TOPIC_MAX];
     char payload[8];
+    int vol = SMART_AUDIO_DEFAULT_VOLUME;
 
+    /* Read the persisted base volume from KV, not smtaudio_vol_get() --
+     * auto_volume silently rescales the live aui_player volume based on
+     * ambient noise without persisting it, so smtaudio_vol_get() can reflect
+     * a transient, ambient-scaled number (e.g. right after boot, before the
+     * user has touched anything) instead of what the user actually set. */
+    aos_kv_getint(VOLUME_SAVE_KV_NAME, &vol);
     snprintf(topic, sizeof(topic), "pinevoice/%s/volume/state", s_mac_id);
-    snprintf(payload, sizeof(payload), "%d", smtaudio_vol_get());
+    snprintf(payload, sizeof(payload), "%d", vol);
     mqtt_pub(topic, payload, strlen(payload), 1);
 }
 
