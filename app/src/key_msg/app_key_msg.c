@@ -17,6 +17,7 @@
 #include "event_mgr/app_event.h"
 #include "../display/pwm_led/pwm_led.h"
 #include "../mqtt/mqtt_client.h"
+#include "../player/app_player.h"
 #include "../player/auto_volume.h"
 #include <wyoming/satellite.h>
 #include <yoc/mic.h>
@@ -69,6 +70,7 @@ static void key_msg_proc_task(void *arg)
                 auto_volume_notify_manual_change();
                 mqtt_client_notify_volume_changed();
                 LOGD(TAG, "vol up:%d", smtaudio_vol_get());
+                local_wakeup_audio_play("chime.opus");
                 light_show_state_msg_send(LIGHT_SHOW_VOLUME_UP, LIGHT_SHOW_MSG_FLAGS(LIGHT_SHOW_MSG_FLAG_INTERRUPT));
                 break;
 
@@ -78,6 +80,7 @@ static void key_msg_proc_task(void *arg)
                 auto_volume_notify_manual_change();
                 mqtt_client_notify_volume_changed();
                 LOGD(TAG, "vol down:%d", smtaudio_vol_get());
+                local_wakeup_audio_play("chime.opus");
                 light_show_state_msg_send(LIGHT_SHOW_VOLUME_DOWN, LIGHT_SHOW_MSG_FLAGS(LIGHT_SHOW_MSG_FLAG_INTERRUPT));
                 break;
 
