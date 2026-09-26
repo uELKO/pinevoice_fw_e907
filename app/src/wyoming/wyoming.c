@@ -15,11 +15,13 @@
 #include "../mqtt/mqtt_client.h"
 #include "../esphome_api/esphome_mdns.h"
 #include <esphome_api/esphome_api.h>
+#include <esphome_api/esphome_proto.h>
 #include "wyoming.h"
 #include "../version.h"
 #include <bl_efuse.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdbool.h>
 
 #define AUD_SAMP_CNT 5
 static uint8_t audio_data[2][320*AUD_SAMP_CNT];
@@ -372,7 +374,30 @@ void cmd_wyoming(char *wbuf, int wbuf_len, int argc, char **argv) {
 }
 
 void cli_reg_cmd_wyoming(void) {
-    
+
   static const struct cli_command cmd_info = {"wyoming", "start Wyoming", cmd_wyoming};
+  aos_cli_register_command(&cmd_info);
+}
+
+// Manual test path for the ESPHome-native-API voice-assistant flow (see
+// TODO.md, "Voice-Assistant-Ablauf") -- not wired to the real wake-word yet.
+// Lets us verify the VoiceAssistantRequest/Response round trip against real
+// HA from the console, without touching the working Wyoming-driven
+// wake-word/mic pipeline.
+void cmd_esphome_va_test(char *wbuf, int wbuf_len, int argc, char **argv) {
+  uint32_t port = 0;
+  bool va_error = false;
+  LOGI(TAG, "esphome_va_test: sending VoiceAssistantRequest...");
+  bool ok = esphome_api_send_voice_assistant_start(
+      "", ESPB_VA_REQUEST_USE_VAD | ESPB_VA_REQUEST_USE_WAKE_WORD, 5000, &port, &va_error);
+  if (!ok) {
+    LOGE(TAG, "esphome_va_test: no VoiceAssistantResponse (no HA connection or timeout)");
+  } else {
+    LOGI(TAG, "esphome_va_test: VoiceAssistantResponse port=%u error=%d", (unsigned)port, (int)va_error);
+  }
+}
+
+void cli_reg_cmd_esphome_va_test(void) {
+  static const struct cli_command cmd_info = {"esphome_va_test", "send a test VoiceAssistantRequest", cmd_esphome_va_test};
   aos_cli_register_command(&cmd_info);
 }

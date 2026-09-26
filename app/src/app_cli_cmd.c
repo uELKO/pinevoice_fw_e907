@@ -32,6 +32,7 @@ extern void cli_reg_cmd_ps(void);
 extern void cli_reg_cmd_free(void);
 extern void cli_reg_cmd_codectest(void);
 extern void cli_reg_cmd_wyoming(void);
+extern void cli_reg_cmd_esphome_va_test(void);
 extern void cli_reg_cmd_improv(void);
 extern void cli_reg_cmd_mdns(void);
 
@@ -88,4 +89,5 @@ void app_cli_init(void)
     cli_reg_cmd_wyoming();
     cli_reg_cmd_improv();
     cli_reg_cmd_mdns();
+    cli_reg_cmd_esphome_va_test();
 }
