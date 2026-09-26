@@ -77,6 +77,13 @@ static struct wsat_wake wake = {
   "alexa"
 };
 
+// Set only by the esphome_va_test CLI command (see below) for the duration
+// of a manual test -- normal operation never touches this, so the existing
+// wsat_mic_write_data() call and Wyoming's whole pipeline stay exactly as
+// they were; this only ever adds an extra, independent forward of the same
+// already-captured PCM.
+static volatile bool s_va_test_streaming = false;
+
 static void mic_streamer_fn(void *arg)
 {
   while (1) {
@@ -86,6 +93,9 @@ static void mic_streamer_fn(void *arg)
     memcpy(data, audio_data[data_sel], sizeof(data));
     data_ready = 0;
     wsat_mic_write_data(data, sizeof(data));
+    if (s_va_test_streaming) {
+      esphome_api_send_voice_assistant_audio(data, sizeof(data), false);
+    }
   }
 }
 
@@ -388,13 +398,28 @@ void cmd_esphome_va_test(char *wbuf, int wbuf_len, int argc, char **argv) {
   uint32_t port = 0;
   bool va_error = false;
   LOGI(TAG, "esphome_va_test: sending VoiceAssistantRequest...");
+  // USE_WAKE_WORD asks HA to run its OWN wake-word stage server-side, which
+  // errors with "wake-engine-missing" on this satellite (on-device wake
+  // word only, nothing configured for HA to run) -- confirmed 2026-09-26 by
+  // decoding the VoiceAssistantEventResponse ERROR event. USE_VAD alone
+  // means "wake word already happened locally, start the pipeline here".
   bool ok = esphome_api_send_voice_assistant_start(
-      "", ESPB_VA_REQUEST_USE_VAD | ESPB_VA_REQUEST_USE_WAKE_WORD, 5000, &port, &va_error);
+      "", ESPB_VA_REQUEST_USE_VAD, 5000, &port, &va_error);
   if (!ok) {
     LOGE(TAG, "esphome_va_test: no VoiceAssistantResponse (no HA connection or timeout)");
-  } else {
-    LOGI(TAG, "esphome_va_test: VoiceAssistantResponse port=%u error=%d", (unsigned)port, (int)va_error);
+    return;
   }
+  LOGI(TAG, "esphome_va_test: VoiceAssistantResponse port=%u error=%d", (unsigned)port, (int)va_error);
+  if (va_error) {
+    return;
+  }
+
+  LOGI(TAG, "esphome_va_test: streaming mic audio for 5s -- say something now!");
+  s_va_test_streaming = true;
+  aos_msleep(5000);
+  s_va_test_streaming = false;
+  esphome_api_send_voice_assistant_audio(NULL, 0, true);
+  LOGI(TAG, "esphome_va_test: audio stream ended");
 }
 
 void cli_reg_cmd_esphome_va_test(void) {
