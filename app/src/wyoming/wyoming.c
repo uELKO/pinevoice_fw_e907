@@ -13,8 +13,13 @@
 #include "../player/auto_volume.h"
 #include "../mqtt/http_config.h"
 #include "../mqtt/mqtt_client.h"
+#include "../esphome_api/esphome_mdns.h"
+#include <esphome_api/esphome_api.h>
 #include "wyoming.h"
 #include "../version.h"
+#include <bl_efuse.h>
+#include <stdio.h>
+#include <string.h>
 
 #define AUD_SAMP_CNT 5
 static uint8_t audio_data[2][320*AUD_SAMP_CNT];
@@ -326,6 +331,41 @@ void wyoming_init()
   auto_volume_init();
   mqtt_client_start();
   LOGI(TAG, "Wyoming init\r\n");
+
+  // Phase 1 of the ESPHome-native-API migration (see TODO.md) -- disabled
+  // again (2026-09-26): shortly after flashing this, the device became
+  // fully unresponsive (no wake word, no button reaction) with the LED
+  // ring stuck on the pure-red error show. Not yet root-caused -- see
+  // TODO.md for the investigation so far (suspects: MDNS_MAX_SERVICES==1
+  // meaning esphome_mdns_advertise_start() can never actually register
+  // its service and Wyoming's already occupies the only slot; the new
+  // esphome_server_task's unthrottled accept()-failure retry loop; extra
+  // task/stack pressure from running a second server task at all). Do not
+  // re-enable until the actual cause is confirmed, not just guessed at.
+#if 0
+  {
+    static char s_esp_hostname[24];
+    static char s_esp_mac[18];
+    static esphome_api_device_info_t s_esp_dev_info;
+    uint8_t mac[6];
+
+    bl_efuse_read_mac_smart(1, mac, 0);
+    snprintf(s_esp_hostname, sizeof(s_esp_hostname), "pinevoice-%02x%02x%02x", mac[3], mac[4], mac[5]);
+    snprintf(s_esp_mac, sizeof(s_esp_mac), "%02X:%02X:%02X:%02X:%02X:%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+    esphome_mdns_advertise_start(s_esp_hostname);
+
+    s_esp_dev_info.name = s_esp_hostname;
+    s_esp_dev_info.friendly_name = s_esp_hostname;
+    s_esp_dev_info.mac_address = s_esp_mac;
+    s_esp_dev_info.model = "PineVoice";
+    s_esp_dev_info.manufacturer = "Pine64";
+    s_esp_dev_info.version = DEFAULT_SOFTWARE_VER;
+    esphome_api_set_device_info(&s_esp_dev_info);
+    esphome_api_start();
+  }
+#endif
 }
 
 void cmd_wyoming(char *wbuf, int wbuf_len, int argc, char **argv) {

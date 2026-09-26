@@ -57,6 +57,7 @@ depends:
   - xutils: v7.5.y
   - multicore_driver: develop
   - wyoming_c_satellite: develop
+  - esphome_native_api: develop
 
 ## 第三部分：板级信息
 # hw_info:                                 # 对 solution、board、chip 三个字段的改进，统称为 hw_info 字段
@@ -160,6 +161,7 @@ source_file:
   - app/src/display/pwm_led/*.c
   - app/src/factory/*.c
   - app/src/wyoming/*.c
+  - app/src/esphome_api/*.c
   - app/src/improv/*.c
   - app/src/mqtt/*.c
   # - app/src/bt/*.c
