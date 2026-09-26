@@ -329,6 +329,11 @@ void wyoming_start(void)
   aos_task_new_ext(&task_handle, "wyoming_server", wyoming_server, (void *)NULL, 4096, AOS_DEFAULT_APP_PRI);
 }
 
+// Defined further down, alongside the rest of the esphome_va_test CLI
+// command it supports; forward-declared so wyoming_init() (right below) can
+// register it.
+static void va_test_event_cb(uint32_t event_type, const char *name, const char *value);
+
 void wyoming_init()
 {
   aui_mic_register();
@@ -374,6 +379,7 @@ void wyoming_init()
     s_esp_dev_info.manufacturer = "Pine64";
     s_esp_dev_info.version = DEFAULT_SOFTWARE_VER;
     esphome_api_set_device_info(&s_esp_dev_info);
+    esphome_api_set_voice_assistant_event_callback(va_test_event_cb);
     esphome_api_start();
   }
 }
@@ -387,6 +393,61 @@ void cli_reg_cmd_wyoming(void) {
 
   static const struct cli_command cmd_info = {"wyoming", "start Wyoming", cmd_wyoming};
   aos_cli_register_command(&cmd_info);
+}
+
+// Separate player instance from Wyoming's own g_player (used for its
+// nsfifo-streamed TTS) -- this one just plays a complete HTTP(S) URL
+// directly, same as e.g. "smta play <url>" on the CLI. Kept independent so
+// nothing about this test path can affect Wyoming's existing, working
+// playback pipeline.
+static player_t *s_va_test_player = NULL;
+
+static void va_test_player_event(player_t *player, uint8_t type, const void *data, uint32_t len)
+{
+  UNUSED(data);
+  UNUSED(len);
+  switch (type) {
+  case PLAYER_EVENT_ERROR:
+    LOGE(TAG, "esphome_va_test: TTS playback error");
+    player_stop(s_va_test_player);
+    break;
+  case PLAYER_EVENT_FINISH:
+    LOGI(TAG, "esphome_va_test: TTS playback finished");
+    player_stop(s_va_test_player);
+    break;
+  default:
+    break;
+  }
+}
+
+static void va_test_play_tts(const char *url)
+{
+  if (!s_va_test_player) {
+    ply_conf_t ply_cnf;
+    player_conf_init(&ply_cnf);
+    ply_cnf.resample_rate = 48000;
+    ply_cnf.event_cb = va_test_player_event;
+    s_va_test_player = player_new(&ply_cnf);
+  }
+  LOGI(TAG, "esphome_va_test: playing TTS from %s", url);
+  player_play(s_va_test_player, url, 0);
+}
+
+// Registered once in wyoming_init() (see below). Runs on the esphome_api
+// connection task -- keep it quick, no blocking network I/O here beyond the
+// already-async player_play() call.
+static void va_test_event_cb(uint32_t event_type, const char *name, const char *value)
+{
+  if ((event_type == ESPB_VA_EVENT_STT_END || event_type == ESPB_VA_EVENT_ERROR ||
+       event_type == ESPB_VA_EVENT_RUN_END) && s_va_test_streaming) {
+    s_va_test_streaming = false;
+    esphome_api_send_voice_assistant_audio(NULL, 0, true);
+    LOGI(TAG, "esphome_va_test: stopped audio streaming (event_type=%u)", (unsigned)event_type);
+  }
+
+  if (event_type == ESPB_VA_EVENT_TTS_END && strcmp(name, "url") == 0) {
+    va_test_play_tts(value);
+  }
 }
 
 // Manual test path for the ESPHome-native-API voice-assistant flow (see
@@ -414,12 +475,17 @@ void cmd_esphome_va_test(char *wbuf, int wbuf_len, int argc, char **argv) {
     return;
   }
 
-  LOGI(TAG, "esphome_va_test: streaming mic audio for 5s -- say something now!");
+  LOGI(TAG, "esphome_va_test: streaming mic audio -- say something now! (stops on STT end)");
   s_va_test_streaming = true;
-  aos_msleep(5000);
-  s_va_test_streaming = false;
-  esphome_api_send_voice_assistant_audio(NULL, 0, true);
-  LOGI(TAG, "esphome_va_test: audio stream ended");
+  // Normally stopped much sooner by va_test_event_cb() on STT_END/ERROR/
+  // RUN_END; this is only a safety net against a pipeline that never signals
+  // one of those (so we don't stream forever).
+  aos_msleep(15000);
+  if (s_va_test_streaming) {
+    s_va_test_streaming = false;
+    esphome_api_send_voice_assistant_audio(NULL, 0, true);
+    LOGW(TAG, "esphome_va_test: no STT-end/error/run-end event within 15s, stopped by timeout");
+  }
 }
 
 void cli_reg_cmd_esphome_va_test(void) {
