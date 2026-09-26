@@ -332,17 +332,16 @@ void wyoming_init()
   mqtt_client_start();
   LOGI(TAG, "Wyoming init\r\n");
 
-  // Phase 1 of the ESPHome-native-API migration (see TODO.md) -- disabled
-  // again (2026-09-26): shortly after flashing this, the device became
-  // fully unresponsive (no wake word, no button reaction) with the LED
-  // ring stuck on the pure-red error show. Not yet root-caused -- see
-  // TODO.md for the investigation so far (suspects: MDNS_MAX_SERVICES==1
-  // meaning esphome_mdns_advertise_start() can never actually register
-  // its service and Wyoming's already occupies the only slot; the new
-  // esphome_server_task's unthrottled accept()-failure retry loop; extra
-  // task/stack pressure from running a second server task at all). Do not
-  // re-enable until the actual cause is confirmed, not just guessed at.
-#if 0
+  // Phase 1 of the ESPHome-native-API migration (see TODO.md). Re-enabled
+  // 2026-09-26 after fixing two confirmed bugs found while first testing
+  // this: MDNS_MAX_SERVICES was 1 (Wyoming's service filled the only slot,
+  // so esphome_mdns_advertise_start() could never register -- bumped to 2
+  // in lwipopts.h), and esphome_server_task's accept()-failure retry loop
+  // had no backoff (added aos_msleep(200)). Neither was confirmed as the
+  // cause of the hang seen on first test (full unresponsiveness, LED stuck
+  // on the red error show, reproduced across a hard power cycle) -- this
+  // re-enable is to observe the boot live over the console and catch the
+  // actual failure point, not a claim that it's fixed.
   {
     static char s_esp_hostname[24];
     static char s_esp_mac[18];
@@ -365,7 +364,6 @@ void wyoming_init()
     esphome_api_set_device_info(&s_esp_dev_info);
     esphome_api_start();
   }
-#endif
 }
 
 void cmd_wyoming(char *wbuf, int wbuf_len, int argc, char **argv) {
