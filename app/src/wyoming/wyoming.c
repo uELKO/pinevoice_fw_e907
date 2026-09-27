@@ -22,15 +22,25 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
+#include <stdlib.h>
 
 #define AUD_SAMP_CNT 5
 static uint8_t audio_data[2][320*AUD_SAMP_CNT];
 static uint8_t audio_data_sel = 0;
-static aos_sem_t audio_sem; 
+static aos_sem_t audio_sem;
 static uint8_t buffers_cnt = 0;
 static uint8_t data_ready = 0;
 
 #define TAG "wyoming"
+
+// Safety switch for the real wake-word path (see cmd_esphome_wake_enable
+// below). Defaults to false (Wyoming, unchanged behavior) and is NEVER
+// persisted to KV -- it always resets to Wyoming-only on reboot, so a bad
+// live test of the ESPHome path can't strand daily use in a broken mode; a
+// power cycle alone recovers, no reflash needed.
+static volatile bool s_esphome_wake_enabled = false;
+static void esphome_wake_trigger(void);
+static void esphome_wake_worker_start(void);
 
 static void mic_evt_cb(int source, mic_event_id_t evt_id, void *data, int size) {
   static uint32_t i = 0;
@@ -38,6 +48,10 @@ static void mic_evt_cb(int source, mic_event_id_t evt_id, void *data, int size) 
     case MIC_EVENT_SESSION_START: {
       LOGD(TAG, "WAKE UP!!!");
       local_wakeup_audio_play("chime.opus");
+      if (s_esphome_wake_enabled) {
+        esphome_wake_trigger();
+        break;
+      }
       int32_t ret = wsat_wake_detection();
       if (!app_network_internet_is_connected() || ret == -WSAT_ERROR_SAT_DISCONNECTED) {
         if (!app_network_internet_is_connected()) {
@@ -77,12 +91,13 @@ static struct wsat_wake wake = {
   "alexa"
 };
 
-// Set only by the esphome_va_test CLI command (see below) for the duration
-// of a manual test -- normal operation never touches this, so the existing
-// wsat_mic_write_data() call and Wyoming's whole pipeline stay exactly as
-// they were; this only ever adds an extra, independent forward of the same
-// already-captured PCM.
-static volatile bool s_va_test_streaming = false;
+// Set by esphome_run_voice_assistant_session() (used by both the CLI test
+// command and, when s_esphome_wake_enabled, the real wake-word path) for the
+// duration of one ESPHome voice-assistant turn. Regardless of this flag, the
+// existing wsat_mic_write_data() call below always runs unchanged -- this
+// only ever adds an extra, independent forward of the same already-captured
+// PCM, so Wyoming's own pipeline is never affected by it.
+static volatile bool s_esphome_streaming = false;
 
 static void mic_streamer_fn(void *arg)
 {
@@ -93,7 +108,7 @@ static void mic_streamer_fn(void *arg)
     memcpy(data, audio_data[data_sel], sizeof(data));
     data_ready = 0;
     wsat_mic_write_data(data, sizeof(data));
-    if (s_va_test_streaming) {
+    if (s_esphome_streaming) {
       esphome_api_send_voice_assistant_audio(data, sizeof(data), false);
     }
   }
@@ -381,6 +396,7 @@ void wyoming_init()
     esphome_api_set_device_info(&s_esp_dev_info);
     esphome_api_set_voice_assistant_event_callback(va_test_event_cb);
     esphome_api_start();
+    esphome_wake_worker_start();
   }
 }
 
@@ -439,10 +455,10 @@ static void va_test_play_tts(const char *url)
 static void va_test_event_cb(uint32_t event_type, const char *name, const char *value)
 {
   if ((event_type == ESPB_VA_EVENT_STT_END || event_type == ESPB_VA_EVENT_ERROR ||
-       event_type == ESPB_VA_EVENT_RUN_END) && s_va_test_streaming) {
-    s_va_test_streaming = false;
+       event_type == ESPB_VA_EVENT_RUN_END) && s_esphome_streaming) {
+    s_esphome_streaming = false;
     esphome_api_send_voice_assistant_audio(NULL, 0, true);
-    LOGI(TAG, "esphome_va_test: stopped audio streaming (event_type=%u)", (unsigned)event_type);
+    LOGI(TAG, "esphome_va: stopped audio streaming (event_type=%u)", (unsigned)event_type);
   }
 
   if (event_type == ESPB_VA_EVENT_TTS_END && strcmp(name, "url") == 0) {
@@ -450,15 +466,18 @@ static void va_test_event_cb(uint32_t event_type, const char *name, const char *
   }
 }
 
-// Manual test path for the ESPHome-native-API voice-assistant flow (see
-// TODO.md, "Voice-Assistant-Ablauf") -- not wired to the real wake-word yet.
-// Lets us verify the VoiceAssistantRequest/Response round trip against real
-// HA from the console, without touching the working Wyoming-driven
-// wake-word/mic pipeline.
-void cmd_esphome_va_test(char *wbuf, int wbuf_len, int argc, char **argv) {
+// One full ESPHome voice-assistant turn: request -> stream mic audio until
+// an event_cb-driven stop -> (TTS playback happens asynchronously via the
+// event callback once TTS_END arrives). Shared by the CLI test command and,
+// when s_esphome_wake_enabled, the real wake-word path (see
+// esphome_wake_worker_fn below) -- exactly what was verified manually
+// against real HA on 2026-09-26 (see TODO.md), just reachable from two
+// different triggers now.
+static void esphome_run_voice_assistant_session(void)
+{
   uint32_t port = 0;
   bool va_error = false;
-  LOGI(TAG, "esphome_va_test: sending VoiceAssistantRequest...");
+  LOGI(TAG, "esphome_va: sending VoiceAssistantRequest...");
   // USE_WAKE_WORD asks HA to run its OWN wake-word stage server-side, which
   // errors with "wake-engine-missing" on this satellite (on-device wake
   // word only, nothing configured for HA to run) -- confirmed 2026-09-26 by
@@ -467,28 +486,84 @@ void cmd_esphome_va_test(char *wbuf, int wbuf_len, int argc, char **argv) {
   bool ok = esphome_api_send_voice_assistant_start(
       "", ESPB_VA_REQUEST_USE_VAD, 5000, &port, &va_error);
   if (!ok) {
-    LOGE(TAG, "esphome_va_test: no VoiceAssistantResponse (no HA connection or timeout)");
+    LOGE(TAG, "esphome_va: no VoiceAssistantResponse (no HA connection or timeout)");
+    local_audio_play("wsat-is-disconnected.opus");
+    light_show_state_msg_send(LIGHT_SHOW_ERROR, LIGHT_SHOW_MSG_FLAGS(LIGHT_SHOW_MSG_FLAG_INTERRUPT));
     return;
   }
-  LOGI(TAG, "esphome_va_test: VoiceAssistantResponse port=%u error=%d", (unsigned)port, (int)va_error);
+  LOGI(TAG, "esphome_va: VoiceAssistantResponse port=%u error=%d", (unsigned)port, (int)va_error);
   if (va_error) {
+    light_show_state_msg_send(LIGHT_SHOW_ERROR, LIGHT_SHOW_MSG_FLAGS(LIGHT_SHOW_MSG_FLAG_INTERRUPT));
     return;
   }
 
-  LOGI(TAG, "esphome_va_test: streaming mic audio -- say something now! (stops on STT end)");
-  s_va_test_streaming = true;
+  LOGI(TAG, "esphome_va: streaming mic audio (stops on STT end)");
+  s_esphome_streaming = true;
   // Normally stopped much sooner by va_test_event_cb() on STT_END/ERROR/
   // RUN_END; this is only a safety net against a pipeline that never signals
   // one of those (so we don't stream forever).
   aos_msleep(15000);
-  if (s_va_test_streaming) {
-    s_va_test_streaming = false;
+  if (s_esphome_streaming) {
+    s_esphome_streaming = false;
     esphome_api_send_voice_assistant_audio(NULL, 0, true);
-    LOGW(TAG, "esphome_va_test: no STT-end/error/run-end event within 15s, stopped by timeout");
+    LOGW(TAG, "esphome_va: no STT-end/error/run-end event within 15s, stopped by timeout");
   }
+}
+
+// Manual test path for the ESPHome-native-API voice-assistant flow (see
+// TODO.md, "Voice-Assistant-Ablauf"). Lets us verify the flow against real
+// HA from the console independent of s_esphome_wake_enabled/the real
+// wake-word path.
+void cmd_esphome_va_test(char *wbuf, int wbuf_len, int argc, char **argv) {
+  esphome_run_voice_assistant_session();
 }
 
 void cli_reg_cmd_esphome_va_test(void) {
   static const struct cli_command cmd_info = {"esphome_va_test", "send a test VoiceAssistantRequest", cmd_esphome_va_test};
+  aos_cli_register_command(&cmd_info);
+}
+
+// Dedicated worker task so mic_evt_cb (called on the mic driver's own task)
+// never blocks on the network -- it just signals this semaphore and returns
+// immediately, exactly like wsat_wake_detection() itself only posts to
+// Wyoming's own async state machine rather than running the turn inline.
+static aos_sem_t s_esphome_wake_sem;
+
+static void esphome_wake_worker_fn(void *arg)
+{
+  while (1) {
+    aos_sem_wait(&s_esphome_wake_sem, AOS_WAIT_FOREVER);
+    esphome_run_voice_assistant_session();
+  }
+}
+
+static void esphome_wake_trigger(void)
+{
+  aos_sem_signal(&s_esphome_wake_sem);
+}
+
+// Called once from wyoming_init() -- always spawns the worker task
+// regardless of s_esphome_wake_enabled (an idle task blocked on a semaphore
+// costs nothing worth gating), so flipping the switch on later needs no
+// further setup.
+static void esphome_wake_worker_start(void)
+{
+  aos_sem_new(&s_esphome_wake_sem, 0);
+  aos_task_t task_handle;
+  aos_task_new_ext(&task_handle, "esphome_wake", esphome_wake_worker_fn, (void *)NULL, 4096, AOS_DEFAULT_APP_PRI);
+}
+
+// Toggles which backend the real wake-word event triggers -- see
+// s_esphome_wake_enabled above for why this is intentionally not persisted.
+void cmd_esphome_wake_enable(char *wbuf, int wbuf_len, int argc, char **argv) {
+  if (argc >= 2) {
+    s_esphome_wake_enabled = (atoi(argv[1]) != 0);
+  }
+  LOGI(TAG, "esphome_wake_enable: real wake word now uses %s (resets to Wyoming on reboot)",
+       s_esphome_wake_enabled ? "ESPHome" : "Wyoming");
+}
+
+void cli_reg_cmd_esphome_wake_enable(void) {
+  static const struct cli_command cmd_info = {"esphome_wake_enable", "0|1: real wake word triggers Wyoming(0, default) or ESPHome(1)", cmd_esphome_wake_enable};
   aos_cli_register_command(&cmd_info);
 }
