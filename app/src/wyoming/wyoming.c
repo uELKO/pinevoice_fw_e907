@@ -426,10 +426,15 @@ static void va_test_player_event(player_t *player, uint8_t type, const void *dat
   case PLAYER_EVENT_ERROR:
     LOGE(TAG, "esphome_va_test: TTS playback error");
     player_stop(s_va_test_player);
+    light_show_state_msg_send(LIGHT_SHOW_READY, NULL);
     break;
   case PLAYER_EVENT_FINISH:
     LOGI(TAG, "esphome_va_test: TTS playback finished");
     player_stop(s_va_test_player);
+    // Mirrors Wyoming's own _player_event() FINISH handling above -- LED
+    // goes back to ready only once playback actually finishes, not on
+    // RUN_END (which arrives well before the HTTP fetch+playback is done).
+    light_show_state_msg_send(LIGHT_SHOW_READY, NULL);
     break;
   default:
     break;
@@ -461,6 +466,21 @@ static void va_test_event_cb(uint32_t event_type, const char *name, const char *
     LOGI(TAG, "esphome_va: stopped audio streaming (event_type=%u)", (unsigned)event_type);
   }
 
+  // LED states, mirroring fback_handle_sys_event()'s Wyoming-driven mapping
+  // above: STT_END -> "processing" (speech captured, working on a reply),
+  // TTS_START -> "answering" (about to speak), ERROR -> back to ready then
+  // flash the error show. RUN_END is deliberately not handled here -- by
+  // the time it arrives, TTS_END/playback may still be in progress (playback
+  // finishing is handled in va_test_player_event() above instead).
+  if (event_type == ESPB_VA_EVENT_STT_END) {
+    light_show_state_msg_send(LIGHT_SHOW_PROCESSING, LIGHT_SHOW_MSG_FLAGS(LIGHT_SHOW_MSG_FLAG_INTERRUPT));
+  } else if (event_type == ESPB_VA_EVENT_ERROR) {
+    light_show_state_set(LIGHT_SHOW_READY);
+    light_show_state_msg_send(LIGHT_SHOW_ERROR, LIGHT_SHOW_MSG_FLAGS(LIGHT_SHOW_MSG_FLAG_INTERRUPT));
+  } else if (event_type == ESPB_VA_EVENT_TTS_START) {
+    light_show_state_msg_send(LIGHT_SHOW_ANSWER, LIGHT_SHOW_MSG_FLAGS(LIGHT_SHOW_MSG_FLAG_INTERRUPT));
+  }
+
   if (event_type == ESPB_VA_EVENT_TTS_END && strcmp(name, "url") == 0) {
     va_test_play_tts(value);
   }
@@ -477,6 +497,9 @@ static void esphome_run_voice_assistant_session(void)
 {
   uint32_t port = 0;
   bool va_error = false;
+  // Mirrors fback_handle_sys_event()'s WSAT_SYS_EVENT_WAKE_DETECTION -- we
+  // are, from here on, actively listening for this turn.
+  light_show_state_msg_send(LIGHT_SHOW_LISTENING, LIGHT_SHOW_MSG_FLAGS(LIGHT_SHOW_MSG_FLAG_INTERRUPT));
   LOGI(TAG, "esphome_va: sending VoiceAssistantRequest...");
   // USE_WAKE_WORD asks HA to run its OWN wake-word stage server-side, which
   // errors with "wake-engine-missing" on this satellite (on-device wake
@@ -488,11 +511,13 @@ static void esphome_run_voice_assistant_session(void)
   if (!ok) {
     LOGE(TAG, "esphome_va: no VoiceAssistantResponse (no HA connection or timeout)");
     local_audio_play("wsat-is-disconnected.opus");
+    light_show_state_set(LIGHT_SHOW_READY);
     light_show_state_msg_send(LIGHT_SHOW_ERROR, LIGHT_SHOW_MSG_FLAGS(LIGHT_SHOW_MSG_FLAG_INTERRUPT));
     return;
   }
   LOGI(TAG, "esphome_va: VoiceAssistantResponse port=%u error=%d", (unsigned)port, (int)va_error);
   if (va_error) {
+    light_show_state_set(LIGHT_SHOW_READY);
     light_show_state_msg_send(LIGHT_SHOW_ERROR, LIGHT_SHOW_MSG_FLAGS(LIGHT_SHOW_MSG_FLAG_INTERRUPT));
     return;
   }
@@ -507,6 +532,8 @@ static void esphome_run_voice_assistant_session(void)
     s_esphome_streaming = false;
     esphome_api_send_voice_assistant_audio(NULL, 0, true);
     LOGW(TAG, "esphome_va: no STT-end/error/run-end event within 15s, stopped by timeout");
+    light_show_state_set(LIGHT_SHOW_READY);
+    light_show_state_msg_send(LIGHT_SHOW_ERROR, LIGHT_SHOW_MSG_FLAGS(LIGHT_SHOW_MSG_FLAG_INTERRUPT));
   }
 }
 
